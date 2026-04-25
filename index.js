@@ -111,7 +111,107 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+
+app.post('/api/fields/import', authenticateToken, async (req, res) => {
+  const field = req.body; 
+
+  // Extract the specific metadata sent from the frontend's 'tags' object
+  const fieldName = field.name;
+  const cropType = field.cropType;
+
+  // Updated validation to ensure the flattened data exists
+  if (!field || !field.id || !field.geometry || !fieldName || !cropType) {
+    console.log(field,field.id,field.geometry,fieldName,cropType)
+    return res.status(400).json({ 
+      error: "Invalid data format. ID, geometry, name, and crop type are required." 
+    });
+  }
+
+  try {
+    // Construct the single, flattened record to insert based on the new SQL schema
+    const userId = req.user.id; // Extracted safely via your JWT middleware
+    
+    const dataToInsert = {
+      id: field.id,
+      user_id: userId,          // Links directly to public.users(id)
+      name: fieldName,          // Flattened from tags.name
+      crop_type: cropType,      // Flattened from tags.crop
+      geometry: field.geometry, // Used by Leaflet to redraw the shape
+      bounds: field.bounds      // Used to zoom the map to the correct area
+    };
+
+    const { data, error } = await supabase
+      .from('fields')
+      .insert(dataToInsert) 
+      .select()
+      .single(); 
+
+    if (error) throw error;
+
+    res.status(201).json({ 
+      message: "Field successfully imported", 
+      field: data 
+    });
+
+  } catch (err) {
+    console.error("Import Error:", err.message);
+    res.status(500).json({ error: "Failed to import field data." });
+  }
+});
+
+
+app.get('/api/fields', authenticateToken, async (req, res) => {
+  try {
+    console.log("Decoded JWT payload:", req.user);
+    console.log("Searching database for user_id:", req.user.id);
+    // 1. Get the securely verified user ID from the JWT middleware
+    const userId = req.user.id; 
+
+    // 2. Query Supabase for all fields matching this user_id
+    const { data, error } = await supabase
+      .from('fields')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false }); // Puts the newest fields first
+    console.log(data);
+    // 3. Handle database errors
+    if (error) {
+      console.error("Database Fetch Error:", error.message);
+      console.log(error);
+      return res.status(500).json({ error: "Failed to fetch fields." });
+    }
+
+    // 4. Return the fields to the frontend
+    res.status(200).json({ fields: data });
+
+  } catch (err) {
+    console.log(err);
+    console.error("Server Error:", err.message);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
 // --- 5. Data Route: Python Integration + Redis Cache ---
+
+// ROUTE 3: Delete a field
+app.delete('/api/fields/:id', authenticateToken, async (req, res) => {
+  try {
+    const fieldId = req.params.id;
+    const userId = req.user.id; // Security: Ensure they only delete THEIR fields
+
+    const { error } = await supabase
+      .from('fields')
+      .delete()
+      .eq('id', fieldId)
+      .eq('user_id', userId);
+
+    if (error) throw error;
+    
+    res.status(200).json({ message: "Field deleted successfully" });
+  } catch (err) {
+    console.error("Delete Error:", err.message);
+    res.status(500).json({ error: "Failed to delete field." });
+  }
+});
 
 app.post('/api/field/analyze', authenticateToken, async (req, res) => {
   const { fieldId, coordinates } = req.body;
